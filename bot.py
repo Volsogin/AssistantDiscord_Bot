@@ -15,7 +15,7 @@ SERVER_IP   = os.getenv("SERVER_IP")
 SERVER_PORT = int(os.getenv("SERVER_PORT", 0))
 TOTP_SECRET = os.getenv("TOTP_SECRET")  # base32-секрет для Google Authenticator
 ALERT_USERS = [int(x) for x in os.getenv("ALERT_USERS", "").split(",") if x]
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60))  # секунд
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60)) # секунд
 # ─────────────────────────────────────────────────────────────────────────────
 
 intents = Intents.default()
