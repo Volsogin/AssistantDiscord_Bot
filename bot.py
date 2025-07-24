@@ -1,23 +1,37 @@
 import os
 import socket
 import asyncio
+import threading
 
 import discord
 import pyotp
 from discord import Intents
 from discord.ext import tasks
 from dotenv import load_dotenv
+from flask import Flask
 
 # ─── Загрузка переменных окружения ───────────────────────────────────────────
 load_dotenv()
-TOKEN       = os.getenv("DISCORD_TOKEN")
-SERVER_IP   = os.getenv("SERVER_IP")
-SERVER_PORT = int(os.getenv("SERVER_PORT", 0))
-TOTP_SECRET = os.getenv("TOTP_SECRET")  # base32-секрет для Google Authenticator
-ALERT_USERS = [int(x) for x in os.getenv("ALERT_USERS", "").split(",") if x]
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60)) # секунд
+TOKEN         = os.getenv("DISCORD_TOKEN")
+SERVER_IP     = os.getenv("SERVER_IP")
+SERVER_PORT   = int(os.getenv("SERVER_PORT", 0))
+TOTP_SECRET   = os.getenv("TOTP_SECRET")  # Base32 секрет для Google Authenticator
+ALERT_USERS   = [int(x) for x in os.getenv("ALERT_USERS", "").split(",") if x]
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60))  # секунд
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Flask-приложение для health-check (Render Web Service требует open port)
+app = Flask(__name__)
+
+@app.route("/")
+def health_check():
+    return "OK"
+
+def run_http():
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+# Discord-бот
 intents = Intents.default()
 intents.messages = True
 bot = discord.Client(intents=intents)
@@ -82,35 +96,31 @@ async def on_message(message: discord.Message):
 
     # Запускаем процесс авторизации OTP
     if text == "/admin":
-        prompt = await message.channel.send("🔒 Пожалуйста, введите 6-значный секретный код:")
+        prompt = await message.channel.send("🔒 Пожалуйста, введите 6-значный код из Google Authenticator:")
         awaiting_otp[uid] = prompt
         return
 
     # Обработка кода OTP
     if uid in awaiting_otp:
         prompt_msg = awaiting_otp.pop(uid)
-        # Удаляем запрос бота
+        # Удаляем запрос бота и сообщение пользователя
         try:
             await prompt_msg.delete()
         except:
             pass
-        # Удаляем сообщение пользователя
         try:
             await message.delete()
         except:
             pass
 
-        # Проверяем 6-значный код
         totp = pyotp.TOTP(TOTP_SECRET)
         if totp.verify(text):
             admin_sessions.add(uid)
             menu = await message.channel.send(
-                "Здравствуйте, Алексей Сергеевич.**\n"
-                "🛠 **Админ-панель\n"
+                "🛠 **Админ-панель**\n"
                 "🌍 — статус сервера\n"
                 "❌ — выход"
             )
-            # Ставим реакции
             await menu.add_reaction("🌍")
             await menu.add_reaction("❌")
             admin_menus[uid] = menu.id
@@ -130,10 +140,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id:
         return
 
-    # Проверяем, что пользователь в админ-сессии
-    if payload.user_id not in admin_menus:
-        return
-    if payload.message_id != admin_menus[payload.user_id]:
+    # Проверяем, что это активная админ-сессия и меню данного пользователя
+    if payload.user_id not in admin_menus or payload.message_id != admin_menus[payload.user_id]:
         return
 
     # Получаем пользователя и DM-канал
@@ -151,17 +159,19 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             + ("онлайн ✅" if status else "офлайн ❌")
         )
     elif emoji == "❌":
-        # Удаляем меню
+        # Удаляем меню и завершаем сессию
         try:
             msg = await channel.fetch_message(payload.message_id)
             await msg.delete()
         except:
             pass
-        # Завершаем сессию
         admin_sessions.discard(payload.user_id)
         admin_menus.pop(payload.user_id, None)
         await user.send("▶️ Вы вышли из админ-панели.")
 
 
 if __name__ == "__main__":
+    # Запускаем HTTP для Render
+    threading.Thread(target=run_http, daemon=True).start()
     bot.run(TOKEN)
+
